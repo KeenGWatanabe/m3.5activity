@@ -1,10 +1,9 @@
 terraform {
   backend "s3" {
-    bucket         = "rgers3.tfstate-backend.com"  # Must match the bucket name above
+    bucket         = "rgers3.tfstate-backend.com"  
     key            = "coaching17/terraform.tfstate"        # State file path
     region         = "us-east-1"                # Same as provider
-    dynamodb_table = "terraform-state-locks"    # If using DynamoDB
-    # use_lockfile   = true                       # replaces dynamodb_table                
+    dynamodb_table = "terraform-state-locks"    # If using DynamoDB              
     encrypt        = true                       # Use encryption
   }
 }
@@ -18,8 +17,56 @@ data "aws_availability_zones" "available" {  # <-- This was missing
 }
 
 locals {
-  prefix = "myapp" # Change to your preferred prefix
+  prefix = "rger"
+  common_tags = {
+    Project   = "Coaching17"
+    Terraform = "true"
+  }
 }
+
+# Network Module
+module "network" {
+  source = "./modules/network"
+  
+  prefix              = local.prefix
+  vpc_cidr            = "10.0.0.0/16"
+  public_subnet_cidrs = ["10.0.1.0/24", "10.0.2.0/24"]
+  availability_zones  = slice(data.aws_availability_zones.available.names, 0, 2)
+  tags                = local.common_tags
+}
+
+# ECR Module
+module "ecr" {
+  source = "./modules/ecr"
+  
+  repository_name = "${local.prefix}-flask-app"
+  tags           = local.common_tags
+}
+
+# ECS Module
+module "ecs" {
+  source = "./modules/ecs"
+  
+  prefix              = local.prefix
+  vpc_id             = module.network.vpc_id
+  public_subnet_ids  = module.network.public_subnet_ids
+  ecr_repository_url = module.ecr.repository_url
+  container_port     = 8080
+  tags               = local.common_tags
+  
+  depends_on = [module.ecr]
+}
+
+# IAM Module
+module "iam" {
+  source = "./modules/iam"
+  
+  prefix         = local.prefix
+  s3_bucket_arn  = "arn:aws:s3:::rgers3.tfstate-backend.com"
+  dynamodb_table = "terraform-state-locks"
+  tags           = local.common_tags
+}
+
 
 # --- VPC & Networking ---
 resource "aws_vpc" "main" {
